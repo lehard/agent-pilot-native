@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 
 VALID_PRIORITIES = ("low", "normal", "high")
 
@@ -17,6 +18,7 @@ class Task:
     title: str
     priority: str = "normal"
     done: bool = False
+    completed_at: str | None = None
 
     def __post_init__(self) -> None:
         if not self.title.strip():
@@ -46,6 +48,7 @@ class TaskList:
     def complete(self, task_id: int) -> Task:
         task = self.get(task_id)
         task.done = True
+        task.completed_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         return task
 
     def edit(self, task_id: int, title: str | None = None, priority: str | None = None) -> Task:
@@ -70,3 +73,10 @@ class TaskList:
 
     def pending(self) -> list[Task]:
         return [t for t in self.tasks if not t.done]
+
+    def history(self, since: date | None = None) -> list[Task]:
+        """Completed tasks that have a completion time, newest first."""
+        found = [t for t in self.tasks if t.done and t.completed_at]
+        if since is not None:
+            found = [t for t in found if t.completed_at[:10] >= since.isoformat()]
+        return sorted(found, key=lambda t: t.completed_at, reverse=True)
