@@ -1,0 +1,92 @@
+name: Agent
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: agent-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      (github.event.label.name == 'agent:go' || github.event.label.name == 'agent:apply') &&
+      contains(github.event.issue.labels.*.name, 'type:requirement')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    env:
+      ISSUE: ${{ github.event.issue.number }}
+      PHASE: ${{ github.event.label.name == 'agent:go' && 'go' || 'apply' }}
+      BRANCH: agent/issue-${{ github.event.issue.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare branch
+        run: |
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then exists=1; else exists=0; fi
+          if [ "$PHASE" = go ] && [ "$exists" = 1 ]; then
+            echo "::error::branch $BRANCH already exists; phase go starts from main only"; exit 1
+          fi
+          if [ "$PHASE" = apply ] && [ "$exists" = 0 ]; then
+            echo "::error::branch $BRANCH does not exist; run phase go first"; exit 1
+          fi
+          if [ "$PHASE" = go ]; then git switch -c "$BRANCH"; else git switch "$BRANCH"; fi
+          echo "START_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . ruff==0.16.1 pytest==8.4.2
+      - name: Claude
+        id: claude
+        uses: anthropics/claude-code-action@402b5b79551e3ce6614c179fbccbfdb79291cead # v1.0.269
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Repository ${{ github.repository }}, Issue #${{ github.event.issue.number }}, phase `${{ env.PHASE }}`.
+            Read .github/agent/AGENT.md and follow it exactly.
+          claude_args: >-
+            --max-turns 80
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(gh issue view:*),Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(ruff:*),Bash(python -m pytest:*),Bash(npx -y @fission-ai/openspec@1.16.0:*),Bash(taskbook:*),Bash(ls:*),Bash(cat:*)"
+            --json-schema '{"type":"object","required":["route","change_id","pr_title","summary"],"properties":{"route":{"enum":["direct","openspec","implemented","blocked","failed"]},"change_id":{"type":"string"},"pr_title":{"type":"string"},"summary":{"type":"string"}}}'
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ steps.claude.outputs.github_token }}
+          RESULT: ${{ steps.claude.outputs.structured_output }}
+        run: |
+          route=$(python -c 'import json,os;print(json.loads(os.environ["RESULT"])["route"])')
+          title=$(python -c 'import json,os;print(json.loads(os.environ["RESULT"])["pr_title"])')
+          summary=$(python -c 'import json,os;print(json.loads(os.environ["RESULT"])["summary"])')
+          echo "route=$route phase=$PHASE"
+          case "$PHASE:$route" in
+            go:direct|go:openspec|apply:implemented) ;;
+            *) gh issue comment "$ISSUE" --body "Agent stopped (phase $PHASE, route $route): $summary"
+               echo "::error::agent ended with route $route in phase $PHASE: $summary"; exit 1 ;;
+          esac
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::agent left uncommitted changes"; git status --porcelain; exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" = "$START_SHA" ]; then
+            echo "::error::agent made no commit"; exit 1
+          fi
+          if git diff --name-only origin/main...HEAD | grep -E '^(\.github/|scripts/check_add\.py$)'; then
+            echo "::error::agent changed protected files (listed above)"; exit 1
+          fi
+          git push origin "$BRANCH"
+          if [ "$PHASE" = go ]; then
+            gh pr create --base main --head "$BRANCH" --title "$title" \
+              --body "$(printf 'Closes #%s\n\n%s\n\nRoute: %s' "$ISSUE" "$summary" "$route")"
+          fi
+          pr=$(gh pr view "$BRANCH" --json url --jq .url)
+          if [ "$route" = openspec ]; then
+            gh issue comment "$ISSUE" --body "ADD ready for owner review: $pr. Approve by adding the line \`Approved-by: lehard\` to add.md in the GitHub web UI, then add the label \`agent:apply\` to this issue."
+          else
+            gh pr merge "$pr" --auto --squash
+            echo "auto-merge armed on $pr"
+          fi
