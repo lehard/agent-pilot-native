@@ -7,6 +7,8 @@ from pathlib import Path
 
 from taskbook.model import Task, TaskList
 
+VERSION = 2
+
 
 class StorageError(RuntimeError):
     """Raised when the task file cannot be read or has an invalid shape."""
@@ -19,14 +21,35 @@ def load(path: Path) -> TaskList:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise StorageError(f"task file {path} is not valid JSON: {exc}") from exc
-    if not isinstance(raw, list):
-        raise StorageError(f"task file {path} must contain a JSON list")
-    return TaskList(tasks=[Task(**item) for item in raw])
+    if isinstance(raw, list):
+        items = raw  # version 1: bare list
+    elif (
+        isinstance(raw, dict)
+        and raw.get("version") == VERSION
+        and isinstance(raw.get("tasks"), list)
+    ):
+        items = raw["tasks"]
+    else:
+        raise StorageError(
+            f"task file {path} has an unrecognised format: expected a JSON list "
+            f"or an object with version {VERSION} and a tasks list"
+        )
+    try:
+        return TaskList(tasks=[Task(**item) for item in items])
+    except (TypeError, ValueError) as exc:
+        raise StorageError(f"task file {path} contains an invalid task: {exc}") from exc
 
 
 def save(task_list: TaskList, path: Path) -> None:
-    data = [
-        {"id": t.id, "title": t.title, "priority": t.priority, "done": t.done}
+    tasks = [
+        {
+            "id": t.id,
+            "title": t.title,
+            "priority": t.priority,
+            "done": t.done,
+            "completed_at": t.completed_at,
+        }
         for t in task_list.tasks
     ]
+    data = {"version": VERSION, "tasks": tasks}
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
