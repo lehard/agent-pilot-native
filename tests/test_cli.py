@@ -34,3 +34,50 @@ def test_done_unknown_id_returns_error(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("TASKBOOK_FILE", str(tmp_path / "t.json"))
     assert main(["done", "5"]) == 1
     assert "no task with id 5" in capsys.readouterr().err
+
+
+def _env(tmp_path, monkeypatch):
+    monkeypatch.setenv("TASKBOOK_FILE", str(tmp_path / "t.json"))
+
+
+def test_edit_title_and_priority_keeps_id(tmp_path, monkeypatch, capsys):
+    _env(tmp_path, monkeypatch)
+    assert main(["add", "by milk"]) == 0
+    assert main(["add", "other"]) == 0
+    assert main(["edit", "1", "--title", "buy milk", "--priority", "high"]) == 0
+    capsys.readouterr()
+    assert main(["list"]) == 0
+    out = capsys.readouterr().out
+    assert "[ ] 1. buy milk (high)" in out
+    assert "[ ] 2. other (normal)" in out
+
+
+def test_edit_only_priority_keeps_title(tmp_path, monkeypatch, capsys):
+    _env(tmp_path, monkeypatch)
+    assert main(["add", "a"]) == 0
+    assert main(["edit", "1", "--priority", "low"]) == 0
+    capsys.readouterr()
+    assert main(["list"]) == 0
+    assert "[ ] 1. a (low)" in capsys.readouterr().out
+
+
+def test_edit_without_options_fails(tmp_path, monkeypatch, capsys):
+    _env(tmp_path, monkeypatch)
+    assert main(["add", "a"]) == 0
+    assert main(["edit", "1"]) == 1
+    assert "nothing to edit" in capsys.readouterr().err
+
+
+def test_edit_unknown_id_returns_error(tmp_path, monkeypatch, capsys):
+    _env(tmp_path, monkeypatch)
+    assert main(["edit", "5", "--title", "x"]) == 1
+    assert "no task with id 5" in capsys.readouterr().err
+
+
+def test_edit_empty_title_rejected_and_task_unchanged(tmp_path, monkeypatch, capsys):
+    _env(tmp_path, monkeypatch)
+    assert main(["add", "a", "--priority", "high"]) == 0
+    assert main(["edit", "1", "--title", "  ", "--priority", "low"]) == 1
+    assert "title" in capsys.readouterr().err
+    assert main(["list"]) == 0
+    assert "[ ] 1. a (high)" in capsys.readouterr().out
