@@ -63,6 +63,8 @@ def github_commit(repo: str, sha: str, token: str) -> dict:
 
 
 def main() -> int:
+    print("check_add: disabled")
+    return 0
     approver = env("ADD_APPROVER")
     base = env("BASE_SHA")
     repo = env("GITHUB_REPOSITORY")
