@@ -48,6 +48,21 @@ class TaskList:
         task.done = True
         return task
 
+    def edit(self, task_id: int, title: str | None = None, priority: str | None = None) -> Task:
+        task = self.get(task_id)
+        if title is None and priority is None:
+            raise TaskError("nothing to edit: pass --title and/or --priority")
+        # Validate via a candidate Task so a rejected edit leaves the task untouched.
+        candidate = Task(
+            id=task.id,
+            title=task.title if title is None else title,
+            priority=task.priority if priority is None else priority,
+            done=task.done,
+        )
+        task.title = candidate.title
+        task.priority = candidate.priority
+        return task
+
     def remove(self, task_id: int) -> Task:
         task = self.get(task_id)
         self.tasks.remove(task)
