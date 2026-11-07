@@ -39,6 +39,8 @@ jobs:
           fi
           if [ "$PHASE" = go ]; then git switch -c "$BRANCH"; else git switch "$BRANCH"; fi
           echo "START_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git show origin/main:.github/agent/publish.sh > "$RUNNER_TEMP/agent_publish.sh"
+          chmod +x "$RUNNER_TEMP/agent_publish.sh"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -51,9 +53,10 @@ jobs:
           prompt: |
             Repository ${{ github.repository }}, Issue #${{ github.event.issue.number }}, phase `${{ env.PHASE }}`.
             Read .github/agent/AGENT.md and follow it exactly.
+            Publish command: ${{ runner.temp }}/agent_publish.sh
           claude_args: >-
             --max-turns 80
-            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(gh issue view:*),Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(ruff:*),Bash(python -m pytest:*),Bash(npx -y @fission-ai/openspec@1.16.0:*),Bash(taskbook:*),Bash(ls:*),Bash(cat:*)"
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(gh issue view:*),Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(ruff:*),Bash(python -m pytest:*),Bash(npx -y @fission-ai/openspec@1.16.0:*),Bash(taskbook:*),Bash(ls:*),Bash(cat:*),Bash(${{ runner.temp }}/agent_publish.sh:*)"
             --json-schema '{"type":"object","required":["route","change_id","pr_title","summary"],"properties":{"route":{"enum":["direct","openspec","implemented","blocked","failed"]},"change_id":{"type":"string"},"pr_title":{"type":"string"},"summary":{"type":"string"}}}'
       - name: Agent result on failure
         if: failure() && steps.claude.outcome == 'failure'
@@ -69,13 +72,12 @@ jobs:
               if key in result:
                   print(f"{key}: {str(result[key])[:2000]}")
           PY
-      - name: Publish
+      - name: Check outcome
         env:
-          GH_TOKEN: ${{ steps.claude.outputs.github_token }}
+          GH_TOKEN: ${{ github.token }}
           RESULT: ${{ steps.claude.outputs.structured_output }}
         run: |
           route=$(python -c 'import json,os;print(json.loads(os.environ["RESULT"])["route"])')
-          title=$(python -c 'import json,os;print(json.loads(os.environ["RESULT"])["pr_title"])')
           summary=$(python -c 'import json,os;print(json.loads(os.environ["RESULT"])["summary"])')
           echo "route=$route phase=$PHASE"
           case "$PHASE:$route" in
@@ -83,24 +85,6 @@ jobs:
             *) gh issue comment "$ISSUE" --body "Agent stopped (phase $PHASE, route $route): $summary"
                echo "::error::agent ended with route $route in phase $PHASE: $summary"; exit 1 ;;
           esac
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::agent left uncommitted changes"; git status --porcelain; exit 1
-          fi
-          if [ "$(git rev-parse HEAD)" = "$START_SHA" ]; then
-            echo "::error::agent made no commit"; exit 1
-          fi
-          if git diff --name-only origin/main...HEAD | grep -E '^(\.github/|scripts/check_add\.py$)'; then
-            echo "::error::agent changed protected files (listed above)"; exit 1
-          fi
-          git push origin "$BRANCH"
-          if [ "$PHASE" = go ]; then
-            gh pr create --base main --head "$BRANCH" --title "$title" \
-              --body "$(printf 'Closes #%s\n\n%s\n\nRoute: %s' "$ISSUE" "$summary" "$route")"
-          fi
-          pr=$(gh pr view "$BRANCH" --json url --jq .url)
-          if [ "$route" = openspec ]; then
-            gh issue comment "$ISSUE" --body "ADD ready for owner review: $pr. Approve by adding the line \`Approved-by: lehard\` to add.md in the GitHub web UI, then add the label \`agent:apply\` to this issue."
-          else
-            gh pr merge "$pr" --auto --squash
-            echo "auto-merge armed on $pr"
-          fi
+          pr=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url')
+          test -n "$pr" || { echo "::error::agent reported $route but no open PR from $BRANCH"; exit 1; }
+          echo "PR: $pr"
