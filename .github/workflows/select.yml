@@ -1,0 +1,25 @@
+name: Select next requirement
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: select-next
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick next requirement
+        env:
+          BOARD_TOKEN: ${{ secrets.BOARD_TOKEN }}
+          BOARD_OWNER: lehard
+          BOARD_NUMBER: "4"
+        run: python3 scripts/select_next.py
