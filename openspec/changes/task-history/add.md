@@ -28,6 +28,8 @@ Option A. It meets every requirement with the least machinery, keeps one file an
 - Migration bug loses data → tests with legacy fixtures; the upgrade is written only on a normal save.
 - Legacy done tasks lack dates → excluded from history rather than invented.
 
+Approved-by: lehard
+
 ## Approval
 
 Approved-by:
