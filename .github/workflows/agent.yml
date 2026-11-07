@@ -55,6 +55,20 @@ jobs:
             --max-turns 80
             --allowedTools "Read,Edit,Write,Glob,Grep,Bash(gh issue view:*),Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(ruff:*),Bash(python -m pytest:*),Bash(npx -y @fission-ai/openspec@1.16.0:*),Bash(taskbook:*),Bash(ls:*),Bash(cat:*)"
             --json-schema '{"type":"object","required":["route","change_id","pr_title","summary"],"properties":{"route":{"enum":["direct","openspec","implemented","blocked","failed"]},"change_id":{"type":"string"},"pr_title":{"type":"string"},"summary":{"type":"string"}}}'
+      - name: Agent result on failure
+        if: failure() && steps.claude.outcome == 'failure'
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          test -n "$EXECUTION_FILE" || { echo "::error::claude step set no execution_file"; exit 1; }
+          python - <<'PY'
+          import json, os
+          messages = json.load(open(os.environ["EXECUTION_FILE"]))
+          result = [m for m in messages if m.get("type") == "result"][-1]
+          for key in ("subtype", "is_error", "num_turns", "result", "errors", "api_error_status"):
+              if key in result:
+                  print(f"{key}: {str(result[key])[:2000]}")
+          PY
       - name: Publish
         env:
           GH_TOKEN: ${{ steps.claude.outputs.github_token }}
